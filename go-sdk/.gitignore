@@ -1,0 +1,4 @@
+.github/scripts/.build
+coverage.out
+output.txt
+TEST-unit.xml

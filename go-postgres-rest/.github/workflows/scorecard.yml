@@ -1,0 +1,59 @@
+name: Scorecard
+
+on:
+  branch_protection_rule:
+  schedule:
+    - cron: '0 6 * * 1'
+  push:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@ff5dd8929f96a8a4dc67d13f32b8c75057829621
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: false
+
+      - name: Filter and sanitize SARIF
+        run: |
+          if ! command -v jq >/dev/null; then
+            sudo apt-get update && sudo apt-get install -y jq
+          fi
+          # Remove results whose ruleId is CII-Best-Practices
+          # Also remove results that contain invalid artifactLocation URIs (e.g. "no file associated with this alert")
+          jq '
+            (.runs[] .results) |= [
+              .[]
+              | select(.ruleId != "CII-Best-Practices")
+              | select((.locations // []) | all(.physicalLocation?.artifactLocation?.uri?; . != "no file associated with this alert"))
+            ]
+          ' results.sarif > filtered.sarif || true
+          mv filtered.sarif results.sarif
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: SARIF file
+          path: results.sarif
+          retention-days: 5
+
+      - name: Upload to code-scanning
+        uses: github/codeql-action/upload-sarif@34950e1b113b30df4edee1a6d3a605242df0c40b
+        with:
+          sarif_file: results.sarif

@@ -1,0 +1,38 @@
+package proto
+
+import (
+	"bytes"
+	"io"
+	"testing"
+	"time"
+)
+
+type fakeWriterDeadline struct {
+	io.Writer
+}
+
+func (f fakeWriterDeadline) SetWriteDeadline(t time.Time) error {
+	return nil
+}
+
+func newFakeWriterDeadline(w io.Writer) fakeWriterDeadline {
+	return fakeWriterDeadline{w}
+}
+
+func TestEncodeLength(t *testing.T) {
+	for _, d := range []struct {
+		length   int
+		rawBytes []byte
+	}{
+		{0x00000001, []byte{0x01}},
+		{0x00000087, []byte{0x80, 0x87}},
+		{0x00004321, []byte{0xC0, 0x43, 0x21}},
+		{0x002acdef, []byte{0xE0, 0x2a, 0xcd, 0xef}},
+		{0x10000080, []byte{0xF0, 0x10, 0x00, 0x00, 0x80}},
+	} {
+		b := encodeLength(d.length)
+		if !bytes.Equal(b, d.rawBytes) {
+			t.Fatalf("Expected output %#v for len=%d, got %#v", d.rawBytes, d.length, b)
+		}
+	}
+}

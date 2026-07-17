@@ -1,0 +1,88 @@
+.PHONY: clean checks test build image e2e
+
+export GO111MODULE=on
+export CGO_ENABLED=0
+
+LEGO_IMAGE := goacme/lego
+MAIN_DIRECTORY := .
+
+BIN_OUTPUT := $(if $(filter $(shell go env GOOS), windows), dist/lego.exe, dist/lego)
+
+TAG_NAME := $(shell git tag -l --contains HEAD)
+SHA := $(shell git rev-parse HEAD)
+VERSION := $(if $(TAG_NAME),$(TAG_NAME),$(SHA))
+
+default: clean generate checks test build
+
+clean:
+	@echo BIN_OUTPUT: ${BIN_OUTPUT}
+	rm -rf dist/ builds/ cover.out
+
+build: clean
+	@echo Version: $(VERSION)
+	go build -trimpath -ldflags '-X "main.version=${VERSION}"' -o ${BIN_OUTPUT} ${MAIN_DIRECTORY}
+
+image:
+	@echo Version: $(VERSION)
+	docker build -t $(LEGO_IMAGE) .
+
+test: clean
+	go test -v -cover ./...
+
+e2e: clean
+	LEGO_E2E_TESTS=local go test -count=1 -v ./e2e/...
+
+checks:
+	golangci-lint run
+
+# Release helper
+.PHONY: patch minor major detach
+
+patch:
+	go run ./internal/generators/releaser/ release -m patch
+
+minor:
+	go run ./internal/generators/releaser/ release -m minor
+
+major:
+	go run ./internal/generators/releaser/ release -m major
+
+detach:
+	go run ./internal/generators/releaser/ detach
+
+# Docs
+.PHONY: docs-build docs-serve docs-themes
+
+docs-build: generate
+	@make -C ./docs build
+
+docs-serve: generate
+	@make -C ./docs serve
+
+docs-themes:
+	@make -C ./docs hugo-themes
+
+# DNS Documentation
+.PHONY: generate validate-doc
+
+generate:
+	go generate ./...
+
+validate-doc: generate
+validate-doc: DOC_DIRECTORIES := ./docs/ ./zz_gen_version.go
+validate-doc:
+	@if git diff --exit-code --quiet $(DOC_DIRECTORIES) 2>/dev/null; then \
+		echo 'All documentation changes are done the right way.'; \
+	else \
+		echo 'The documentation must be regenerated, please use `make generate`.'; \
+		git status --porcelain -- $(DOC_DIRECTORIES) 2>/dev/null; \
+		exit 2; \
+	fi
+
+# Dependencies management
+# https://github.com/ldez/modupwiz/
+.PHONY: modupwiz-prepare
+
+modupwiz-prepare:
+	modupwiz -path=bump.sh template -template='.github/modupwiz/bump.sh.tmpl'
+	modupwiz -path=bump.md template -template='.github/modupwiz/bump.md.tmpl'

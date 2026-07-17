@@ -1,0 +1,11 @@
+go 1.25.0
+
+use (
+	.
+	./examples
+	./internal/cmd/benchmark
+	./internal/cmd/check-fmt
+	./internal/cmd/faas/awslambda/mongodb
+	./internal/test/compilecheck
+	./internal/test/goleak
+)

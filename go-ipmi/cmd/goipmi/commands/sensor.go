@@ -1,0 +1,368 @@
+package commands
+
+import (
+	"context"
+	"fmt"
+
+	ipmiclient "github.com/bougou/go-ipmi/pkg/client"
+	"github.com/bougou/go-ipmi/pkg/types"
+	"github.com/spf13/cobra"
+)
+
+func NewCmdSensor() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "sensor",
+		Short: "sensor",
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return initClient()
+		},
+		Run: func(cmd *cobra.Command, args []string) {
+		},
+		PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
+			return closeClient()
+		},
+	}
+	cmd.AddCommand(NewCmdSensorDeviceSDRInfo())
+	cmd.AddCommand(NewCmdSensorGet())
+	cmd.AddCommand(NewCmdSensorList())
+	cmd.AddCommand(NewCmdSensorThreshold())
+	cmd.AddCommand(NewCmdSensorEventEnable())
+	cmd.AddCommand(NewCmdSensorEventStatus())
+	cmd.AddCommand(NewCmdSensorReading())
+	cmd.AddCommand(NewCmdSensorReadingFactors())
+	cmd.AddCommand(NewCmdSensorDetail())
+
+	return cmd
+}
+
+func NewCmdSensorDeviceSDRInfo() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "info",
+		Short: "info",
+		Run: func(cmd *cobra.Command, args []string) {
+			ctx := context.Background()
+			res, err := client.GetDeviceSDRInfo(ctx, true)
+			if err != nil {
+				CheckErr(fmt.Errorf("GetDeviceSDRInfo failed, err: %w", err))
+			}
+			fmt.Println(res.Format())
+		},
+	}
+	return cmd
+}
+
+func NewCmdSensorList() *cobra.Command {
+	var streamMode bool
+	var extended bool
+	var filterThreshold bool
+	var filterReadingValid bool
+
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "list",
+		Run: func(cmd *cobra.Command, args []string) {
+			filterOptions := make([]ipmiclient.SensorFilterOption, 0)
+
+			if filterThreshold {
+				filterOptions = append(filterOptions, ipmiclient.SensorFilterOptionIsThreshold)
+			}
+
+			if filterReadingValid {
+				filterOptions = append(filterOptions, ipmiclient.SensorFilterOptionIsReadingValid)
+			}
+
+			ctx := context.Background()
+
+			if streamMode {
+				sensors := client.GetSensorsStream(ctx, filterOptions...)
+				if err := types.FormatSensorsStream(extended, sensors); err != nil {
+					CheckErr(fmt.Errorf("FormatSensorsStream failed, err: %w", err))
+				}
+			} else {
+				sensors, err := client.GetSensors(ctx, filterOptions...)
+				if err != nil {
+					CheckErr(fmt.Errorf("GetSensors failed, err: %w", err))
+				}
+				fmt.Println(types.FormatSensors(extended, sensors...))
+			}
+
+		},
+	}
+
+	cmd.PersistentFlags().BoolVarP(&extended, "extended", "", false, "extended print")
+	cmd.PersistentFlags().BoolVarP(&filterThreshold, "threshold", "", false, "filter threshold sensor class")
+	cmd.PersistentFlags().BoolVarP(&filterReadingValid, "valid", "", false, "filter sensor that has valid reading")
+	cmd.PersistentFlags().BoolVarP(&streamMode, "stream", "", false, "Enable stream mode output")
+
+	return cmd
+}
+
+func NewCmdSensorGet() *cobra.Command {
+	usage := `sensor get <sensorNumber> or <sensorName>, sensorName should be quoted if contains space`
+
+	cmd := &cobra.Command{
+		Use:   "get",
+		Short: "get",
+		Run: func(cmd *cobra.Command, args []string) {
+			var sensorNumber uint8
+
+			if len(args) < 1 {
+				CheckErr(fmt.Errorf("no Sensor ID or Sensor Name supplied, usage: %s", usage))
+			}
+
+			ctx := context.Background()
+
+			var sensor *types.Sensor
+			var err error
+
+			id, err := parseStringToInt64(args[0])
+			if err != nil {
+				// suppose args is sensor name
+				sensor, err = client.GetSensorByName(ctx, args[0])
+				if err != nil {
+					CheckErr(fmt.Errorf("GetSensorByName failed, err: %w", err))
+				}
+			} else {
+				sensorNumber = uint8(id)
+				sensor, err = client.GetSensorByID(ctx, sensorNumber)
+				if err != nil {
+					CheckErr(fmt.Errorf("GetSensorByID failed, err: %w", err))
+				}
+			}
+
+			client.Debug("sensor", sensor)
+			fmt.Println(sensor)
+		},
+	}
+	return cmd
+}
+
+func NewCmdSensorThreshold() *cobra.Command {
+	usage := `
+sensor threshold get <sensor_number>
+	`
+	cmd := &cobra.Command{
+		Use:   "threshold",
+		Short: "threshold",
+		Run: func(cmd *cobra.Command, args []string) {
+			if len(args) < 2 {
+				CheckErr(fmt.Errorf("usage: %s", usage))
+			}
+
+			action := args[0]
+			var sensorNumber uint8
+			i, err := parseStringToInt64(args[1])
+			if err != nil {
+				CheckErr(fmt.Errorf("invalid sensor number, err: %w", err))
+			}
+			sensorNumber = uint8(i)
+
+			ctx := context.Background()
+			switch action {
+			case "get":
+				res, err := client.GetSensorThresholds(ctx, sensorNumber)
+				if err != nil {
+					CheckErr(fmt.Errorf("GetSensorThresholds failed, err: %w", err))
+				}
+				fmt.Println(res.Format())
+			case "set":
+			default:
+				CheckErr(fmt.Errorf("usage: %s", usage))
+			}
+
+		},
+	}
+	return cmd
+}
+
+func NewCmdSensorEventStatus() *cobra.Command {
+	usage := `
+sensor event-status get <sensor_number>
+	`
+	cmd := &cobra.Command{
+		Use:   "event-status ",
+		Short: "event-status ",
+		Run: func(cmd *cobra.Command, args []string) {
+			if len(args) < 2 {
+				CheckErr(fmt.Errorf("usage: %s", usage))
+			}
+
+			action := args[0]
+			var sensorNumber uint8
+			i, err := parseStringToInt64(args[1])
+			if err != nil {
+				CheckErr(fmt.Errorf("invalid sensor number, err: %w", err))
+			}
+			sensorNumber = uint8(i)
+
+			ctx := context.Background()
+			switch action {
+			case "get":
+				res, err := client.GetSensorEventStatus(ctx, sensorNumber)
+				if err != nil {
+					CheckErr(fmt.Errorf("GetSensorEventStatus failed, err: %w", err))
+				}
+				fmt.Println(res.Format())
+			case "set":
+			default:
+				CheckErr(fmt.Errorf("usage: %s", usage))
+			}
+		},
+	}
+	return cmd
+}
+
+func NewCmdSensorEventEnable() *cobra.Command {
+	usage := `
+sensor event-enable get <sensor_number>
+	`
+	cmd := &cobra.Command{
+		Use:   "event-enable ",
+		Short: "event-enable ",
+		Run: func(cmd *cobra.Command, args []string) {
+			if len(args) < 2 {
+				CheckErr(fmt.Errorf("usage: %s", usage))
+			}
+
+			action := args[0]
+
+			var sensorNumber uint8
+			i, err := parseStringToInt64(args[1])
+			if err != nil {
+				CheckErr(fmt.Errorf("invalid sensor number, err: %w", err))
+			}
+			sensorNumber = uint8(i)
+
+			ctx := context.Background()
+			switch action {
+			case "get":
+				res, err := client.GetSensorEventEnable(ctx, sensorNumber)
+				if err != nil {
+					CheckErr(fmt.Errorf("GetSensorEventEnable failed, err: %w", err))
+				}
+				fmt.Println(res.Format())
+			case "set":
+			default:
+				CheckErr(fmt.Errorf("usage: %s", usage))
+			}
+		},
+	}
+	return cmd
+}
+
+func NewCmdSensorReading() *cobra.Command {
+	usage := `
+sensor reading get <sensor_number>
+	`
+	cmd := &cobra.Command{
+		Use:   "reading",
+		Short: "reading",
+		Run: func(cmd *cobra.Command, args []string) {
+			if len(args) < 2 {
+				CheckErr(fmt.Errorf("usage: %s", usage))
+			}
+
+			action := args[0]
+
+			var sensorNumber uint8
+			i, err := parseStringToInt64(args[1])
+			if err != nil {
+				CheckErr(fmt.Errorf("invalid sensor number, err: %w", err))
+			}
+			sensorNumber = uint8(i)
+
+			ctx := context.Background()
+			switch action {
+			case "get":
+				res, err := client.GetSensorReading(ctx, sensorNumber)
+				if err != nil {
+					CheckErr(fmt.Errorf("GetSensorReading failed, err: %w", err))
+				}
+				fmt.Println(res.Format())
+			case "set":
+			default:
+				CheckErr(fmt.Errorf("usage: %s", usage))
+			}
+		},
+	}
+	return cmd
+}
+
+func NewCmdSensorReadingFactors() *cobra.Command {
+	usage := `
+sensor reading-factors get <sensor_number>
+	`
+	cmd := &cobra.Command{
+		Use:   "reading-factors",
+		Short: "reading-factors",
+		Run: func(cmd *cobra.Command, args []string) {
+			if len(args) < 2 {
+				CheckErr(fmt.Errorf("usage: %s", usage))
+			}
+
+			action := args[0]
+
+			var sensorNumber uint8
+			i, err := parseStringToInt64(args[1])
+			if err != nil {
+				CheckErr(fmt.Errorf("invalid sensor number, err: %w", err))
+			}
+			sensorNumber = uint8(i)
+
+			ctx := context.Background()
+			switch action {
+			case "get":
+				res0, err := client.GetSensorReading(ctx, sensorNumber)
+				if err != nil {
+					CheckErr(fmt.Errorf("GetSensorReading failed, err: %w", err))
+				}
+				fmt.Println(res0.Format())
+
+				res, err := client.GetSensorReadingFactors(ctx, sensorNumber, res0.Reading)
+				if err != nil {
+					CheckErr(fmt.Errorf("GetSensorReadingFactors failed, err: %w", err))
+				}
+				fmt.Println(res.Format())
+			case "set":
+			default:
+				CheckErr(fmt.Errorf("usage: %s", usage))
+			}
+		},
+	}
+	return cmd
+}
+
+func NewCmdSensorDetail() *cobra.Command {
+	usage := `
+sensor detail <sensor_number>
+	`
+
+	cmd := &cobra.Command{
+		Use:   "detail",
+		Short: "detail",
+		Run: func(cmd *cobra.Command, args []string) {
+
+			if len(args) < 1 {
+				CheckErr(fmt.Errorf("usage: %s", usage))
+			}
+
+			var sensorNumber uint8
+
+			if len(args) >= 1 {
+				i, err := parseStringToInt64(args[0])
+				if err != nil {
+					CheckErr(fmt.Errorf("invalid sensor number, err: %w", err))
+				}
+				sensorNumber = uint8(i)
+			}
+
+			ctx := context.Background()
+			sensor, err := client.GetSensorByID(ctx, sensorNumber)
+			if err != nil {
+				CheckErr(fmt.Errorf("GetSensorByID failed, err: %w", err))
+			}
+			fmt.Println(sensor)
+		},
+	}
+	return cmd
+}

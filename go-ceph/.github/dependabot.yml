@@ -1,0 +1,34 @@
+---
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    rebase-strategy: "disabled"
+    labels:
+      - "no-API"
+    commit-message:
+      prefix: "go-ceph"
+    groups:
+      aws-sdk:
+        patterns:
+          - "github.com/aws/aws-sdk-*"
+  - package-ecosystem: "gomod"
+    directory: "/contrib/implements"
+    schedule:
+      interval: "monthly"
+    rebase-strategy: "disabled"
+    labels:
+      - "no-API"
+    commit-message:
+      prefix: "contrib"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    rebase-strategy: disabled
+    labels:
+      - "no-API"
+    commit-message:
+      prefix: "go-ceph"

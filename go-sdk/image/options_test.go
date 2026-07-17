@@ -1,0 +1,37 @@
+package image
+
+import (
+	"context"
+	"testing"
+
+	dockerclient "github.com/moby/moby/client"
+	"github.com/stretchr/testify/require"
+
+	"github.com/docker/go-sdk/client"
+)
+
+func TestWithOptions(t *testing.T) {
+	t.Run("with-pull-client", func(t *testing.T) {
+		pullClient := &mockImagePullClient{}
+		sdk, err := client.New(context.TODO(), client.WithDockerAPI(pullClient))
+		require.NoError(t, err)
+		pullOpts := &pullOptions{}
+		err = WithPullClient(sdk)(pullOpts)
+		require.NoError(t, err)
+		require.Equal(t, sdk, pullOpts.client)
+	})
+
+	t.Run("with-pull-options", func(t *testing.T) {
+		opts := dockerclient.ImagePullOptions{}
+		pullOpts := &pullOptions{}
+		err := WithPullOptions(opts)(pullOpts)
+		require.NoError(t, err)
+		require.Equal(t, opts, pullOpts.pullOptions)
+	})
+
+	t.Run("with-credentials-from-config", func(t *testing.T) {
+		opts := &pullOptions{}
+		err := WithCredentialsFromConfig(opts)
+		require.NoError(t, err)
+	})
+}

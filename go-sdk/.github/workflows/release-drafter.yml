@@ -1,0 +1,69 @@
+name: Release Drafter
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  detect-packages:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      packages: ${{ steps.filter.outputs.changes || '[]' }}
+    steps:
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Generate filters
+        id: filter-setup
+        run: |
+          filters=$(go work edit -json | jq -r '.Use[] | "\(.DiskPath | ltrimstr("./")): \"\(.DiskPath | ltrimstr("./"))/**\""')
+          echo "filters<<EOF" >> $GITHUB_OUTPUT
+          echo "$filters" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Filter changes
+        id: filter
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        with:
+          filters: ${{ steps.filter-setup.outputs.filters }}
+
+  release-drafter:
+    needs: detect-packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: needs.detect-packages.outputs.packages != '[]' # Ensure job runs only if there are changes
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: write  # for release-drafter/release-drafter to create a github release
+    strategy:
+      matrix:
+        package: ${{ fromJSON(needs.detect-packages.outputs.packages || '[]') }}
+    steps:
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Generate dynamic config from template
+        id: generate-config
+        env:
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          folder="${PACKAGE}"
+          sed "s|{{FOLDER}}|$folder|g" .github/release-drafter-template.yml > .github/release-drafter-$folder.yml
+          echo "config<<EOF" >> $GITHUB_OUTPUT
+          cat .github/release-drafter-$folder.yml >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      # Workaround until https://github.com/release-drafter/release-drafter/pull/1423 is merged
+      - name: Use dynamic release-drafter configuration
+        uses: ReneWerner87/release-drafter@6dec4ceb1fb86b6514f11a2e7a39e1dedce709d0 # fork, no release tag (provides inline `config:` from release-drafter#1423)
+        with:
+          config: ${{ steps.generate-config.outputs.config }}

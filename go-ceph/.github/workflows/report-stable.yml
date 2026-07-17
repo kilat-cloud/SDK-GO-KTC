@@ -1,0 +1,32 @@
+
+name: Report-API-Updates
+
+# Run tests on pull requests and when changes are directly
+# commited to master.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  find-updates:
+    runs-on: ubuntu-latest
+    steps:
+    # Checkout with fetch-depth=0 in order to fetch (all) tags.
+    # The Makefile runs git commands to pass tag info to the apiage script.
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      with:
+        fetch-depth: 0
+    - name: Run makefile
+      run: make api-report-issuetemplate  RESULTS_DIR=_results
+    - name: Archive test results
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: "go-ceph-api-updates"
+        path: |
+          _results/
+        retention-days: 30
+      if: "!cancelled()"
+    - name: File a GitHub Issue
+      run: gh issue create --title "$(cat _results/title.txt)" --body-file _results/body.md
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}

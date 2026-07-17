@@ -1,0 +1,48 @@
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+cover.out
+e2e-reports/
+
+# Translations
+*.mo
+*.pot
+
+# emacs
+.\#*
+
+# vim
+*.swp
+
+# ignore bin
+/bin/
+_output
+
+# ignore vscode
+.vscode
+
+# goland
+.idea
+
+# Test binary, build with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+.DS_Store
+
+# e2e binaries produced by `make build` (see test/e2e/common.sh)
+/_output/goipmi
+/_output/goipmi-server
+
+# asdf
+.tool-versions
+.claude

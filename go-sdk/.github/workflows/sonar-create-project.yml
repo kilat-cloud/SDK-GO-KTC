@@ -1,0 +1,24 @@
+name: Create Sonar Project
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_name:
+        description: 'Name of the project (without type prefix, e.g. client, container, image, network, etc.)'
+        required: true
+        type: string
+
+jobs:
+  create-project:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      
+      - name: Create Sonar Project for module
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          chmod +x .github/scripts/sonar-manager.sh
+          .github/scripts/sonar-manager.sh -a "create" -p "${{ inputs.project_name }}"

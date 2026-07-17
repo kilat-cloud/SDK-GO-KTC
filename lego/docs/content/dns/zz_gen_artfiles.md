@@ -1,0 +1,69 @@
+---
+title: "ArtFiles"
+date: 2019-03-03T16:39:46+01:00
+draft: false
+slug: artfiles
+dnsprovider:
+  since:    "v4.32.0"
+  code:     "artfiles"
+  url:      "https://www.artfiles.de/extras/domains/"
+---
+
+<!-- THIS DOCUMENTATION IS AUTO-GENERATED. PLEASE DO NOT EDIT. -->
+<!-- providers/dns/artfiles/artfiles.toml -->
+<!-- THIS DOCUMENTATION IS AUTO-GENERATED. PLEASE DO NOT EDIT. -->
+
+
+Configuration for [ArtFiles](https://www.artfiles.de/extras/domains/).
+
+
+<!--more-->
+
+- Code: `artfiles`
+- Since: v4.32.0
+
+
+Here is an example bash command using the ArtFiles provider:
+
+```bash
+ARTFILES_USERNAME="xxx" \
+ARTFILES_PASSWORD="yyy" \
+lego run --dns artfiles -d '*.example.com' -d example.com
+```
+
+
+
+
+## Credentials
+
+| Environment Variable Name | Description |
+|-----------------------|-------------|
+| `ARTFILES_PASSWORD` | API password |
+| `ARTFILES_USERNAME` | API username |
+
+The environment variable names can be suffixed by `_FILE` to reference a file instead of a value.
+More information [here]({{% ref "dns#configuration-and-credentials" %}}).
+
+
+## Additional Configuration
+
+| Environment Variable Name | Description |
+|--------------------------------|-------------|
+| `ARTFILES_HTTP_TIMEOUT` | API request timeout in seconds (Default: 30) |
+| `ARTFILES_POLLING_INTERVAL` | Time between DNS propagation check in seconds (Default: 2) |
+| `ARTFILES_PROPAGATION_TIMEOUT` | Maximum waiting time for DNS propagation in seconds (Default: 360) |
+| `ARTFILES_SERVER_NAME` | Your server name (Default: dcp) |
+
+The environment variable names can be suffixed by `_FILE` to reference a file instead of a value.
+More information [here]({{% ref "dns#configuration-and-credentials" %}}).
+
+
+
+
+## More information
+
+- [API documentation](https://support.artfiles.de/DCP-API#dns)
+
+<!-- THIS DOCUMENTATION IS AUTO-GENERATED. PLEASE DO NOT EDIT. -->
+<!-- providers/dns/artfiles/artfiles.toml -->
+<!-- THIS DOCUMENTATION IS AUTO-GENERATED. PLEASE DO NOT EDIT. -->

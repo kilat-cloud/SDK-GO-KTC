@@ -1,0 +1,7 @@
+*
+!cmd
+!pkg
+!internal
+!go.*
+!index.html
+!config.ini

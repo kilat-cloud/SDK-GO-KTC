@@ -1,0 +1,121 @@
+package commands
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/bougou/go-ipmi/pkg/types"
+	"github.com/spf13/cobra"
+)
+
+func NewCmdSEL() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "sel",
+		Short: "sel",
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return initClient()
+		},
+		Run: func(cmd *cobra.Command, args []string) {
+		},
+		PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
+			return closeClient()
+		},
+	}
+	cmd.AddCommand(NewCmdSELInfo())
+	cmd.AddCommand(NewCmdSELGet())
+	cmd.AddCommand(NewCmdSELList())
+	return cmd
+}
+
+func NewCmdSELInfo() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "info",
+		Short: "info",
+		Run: func(cmd *cobra.Command, args []string) {
+			ctx := context.Background()
+			selInfo, err := client.GetSELInfo(ctx)
+			if err != nil {
+				CheckErr(fmt.Errorf("GetSELInfo failed, err: %w", err))
+			}
+			fmt.Println(selInfo.Format())
+
+			selAllocInfo, err := client.GetSELAllocInfo(ctx)
+			if err != nil {
+				CheckErr(fmt.Errorf("GetSELAllocInfo failed, err: %w", err))
+			}
+			fmt.Println(selAllocInfo.Format())
+		},
+	}
+	return cmd
+}
+
+func NewCmdSELGet() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "get",
+		Short: "get",
+		Run: func(cmd *cobra.Command, args []string) {
+			if len(args) < 1 {
+				CheckErr(errors.New("no Record ID supplied"))
+			}
+			id, err := parseStringToInt64(args[0])
+			if err != nil {
+				CheckErr(fmt.Errorf("invalid Record ID passed, err: %w", err))
+			}
+			recordID := uint16(id)
+
+			ctx := context.Background()
+			selEntryRes, err := client.GetSELEntry(ctx, 0x0, recordID)
+			if err != nil {
+				CheckErr(fmt.Errorf("GetSELEntry failed, err: %w", err))
+			}
+
+			sel, err := types.ParseSEL(selEntryRes.Data)
+			if err != nil {
+				CheckErr(fmt.Errorf("ParseSEL failed, err: %w", err))
+			}
+			fmt.Println(types.FormatSELs([]*types.SEL{sel}, nil))
+		},
+	}
+	return cmd
+}
+
+func NewCmdSELList() *cobra.Command {
+	var extended bool
+	var streamMode bool
+
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "list",
+		Run: func(cmd *cobra.Command, args []string) {
+			ctx := context.Background()
+
+			var sdrsMap types.SDRMapBySensorNumber
+			var err error
+			if extended {
+				sdrsMap, err = client.GetSDRsMap(ctx)
+				if err != nil {
+					CheckErr(fmt.Errorf("GetSDRsMap failed, err: %w", err))
+				}
+			}
+
+			if streamMode {
+				selEntries := client.GetSELEntriesStream(ctx, 0)
+				if err := types.FormatSELsStream(selEntries, sdrsMap); err != nil {
+					CheckErr(fmt.Errorf("FormatSELsStream failed, err: %w", err))
+				}
+			} else {
+				selEntries, err := client.GetSELEntries(ctx, 0)
+				if err != nil {
+					CheckErr(fmt.Errorf("GetSELEntries failed, err: %w", err))
+				}
+				fmt.Println(types.FormatSELs(selEntries, sdrsMap))
+			}
+		},
+	}
+
+	cmd.Flags().BoolVarP(&extended, "extended", "e", false, "extended mode")
+	cmd.Flags().BoolVarP(&streamMode, "stream", "", false, "Enable stream mode output")
+
+	return cmd
+}

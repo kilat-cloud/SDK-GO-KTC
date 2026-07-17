@@ -1,0 +1,275 @@
+package container
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/netip"
+	"os"
+
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	dockerclient "github.com/moby/moby/client"
+
+	"github.com/docker/go-connections/nat"
+	"github.com/docker/go-sdk/client"
+)
+
+// defaultPreCreateHook is a hook that will apply the default configuration to the container
+var defaultPreCreateHook = func(dockerClient client.SDKClient, dockerInput *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig) LifecycleHooks {
+	return LifecycleHooks{
+		PreCreates: []DefinitionHook{
+			func(ctx context.Context, def *Definition) error {
+				return preCreateContainerHook(ctx, dockerClient, def, dockerInput, hostConfig, networkingConfig)
+			},
+		},
+	}
+}
+
+// defaultCopyFileToContainerHook is a hook that will copy files to the container after it's created
+// but before it's started
+var defaultCopyFileToContainerHook = func(files []File) LifecycleHooks {
+	return LifecycleHooks{
+		PostCreates: []ContainerHook{
+			// copy files to container after it's created
+			func(ctx context.Context, c ContainerInfo) error {
+				fileOperator, ok := c.(ContainerFileOperator)
+				if !ok {
+					return errors.New("container does not support file operations")
+				}
+
+				for _, f := range files {
+					if err := f.validate(); err != nil {
+						return fmt.Errorf("invalid file: %w", err)
+					}
+
+					var bs []byte
+					var err error
+					if f.Reader != nil {
+						// Bytes takes precedence over HostFilePath
+						bs, err = io.ReadAll(f.Reader)
+						if err != nil {
+							return fmt.Errorf("read all: %w", err)
+						}
+					} else {
+						// no reader, read from host path, checking if it's a directory first
+						ok, err := isDir(f.HostPath)
+						if err != nil {
+							return err
+						}
+
+						if ok {
+							err := fileOperator.CopyDirToContainer(ctx, f.HostPath, f.ContainerPath, f.Mode)
+							if err != nil {
+								return fmt.Errorf("copy dir to container: %w", err)
+							}
+							continue
+						}
+
+						bs, err = os.ReadFile(f.HostPath)
+						if err != nil {
+							return fmt.Errorf("read file: %w", err)
+						}
+					}
+
+					err = fileOperator.CopyToContainer(ctx, bs, f.ContainerPath, f.Mode)
+					if err != nil {
+						return fmt.Errorf("copy to container at %s: %w", f.ContainerPath, err)
+					}
+				}
+
+				return nil
+			},
+		},
+	}
+}
+
+// defaultReadinessHook is a hook that will wait for the container to be ready
+var defaultReadinessHook = func() LifecycleHooks {
+	return LifecycleHooks{
+		PostStarts: []ContainerHook{
+			// wait for the container to be ready
+			func(ctx context.Context, c ContainerInfo) error {
+				waiter, ok := c.(ContainerWaiter)
+				if !ok {
+					return errors.New("container does not support waiting")
+				}
+
+				// if a Wait Strategy has been specified, wait before returning
+				if waiter.WaitingFor() != nil {
+					strategy := waiter.WaitingFor()
+					strategyDesc := "unknown strategy"
+					if s, ok := strategy.(fmt.Stringer); ok {
+						strategyDesc = s.String()
+					}
+					c.Logger().Info("Waiting for container to be ready", "containerID", c.ShortID(), "image", c.Image(), "strategy", strategyDesc)
+					if err := strategy.WaitUntilReady(ctx, waiter); err != nil {
+						return fmt.Errorf("wait until ready: %w", err)
+					}
+				}
+
+				if stateManager, ok := c.(ContainerStateManager); ok {
+					stateManager.Running(true)
+				}
+
+				return nil
+			},
+		},
+	}
+}
+
+// creatingHook is a hook that will be called before a container is created.
+func (def *Definition) creatingHook(ctx context.Context) error {
+	return def.applyLifecycleHooks(func(lifecycleHooks LifecycleHooks) error {
+		return applyDefinitionHooks(ctx, lifecycleHooks.PreCreates, def)
+	})
+}
+
+// createdHook is a hook that will be called after a container is created.
+func (c *Container) createdHook(ctx context.Context) error {
+	return c.applyLifecycleHooks(ctx, false, func(lifecycleHooks LifecycleHooks) error {
+		return applyContainerHooks(ctx, lifecycleHooks.PostCreates, c)
+	})
+}
+
+func mergePortBindings(configPortMap, exposedPortMap network.PortMap, exposedPorts []string) network.PortMap {
+	if exposedPortMap == nil {
+		exposedPortMap = make(network.PortMap)
+	}
+
+	mappedPorts := make(network.PortSet, len(exposedPorts))
+	for _, p := range exposedPorts {
+		port, err := network.ParsePort(p)
+		if err != nil {
+			// TODO(robmry) - handle/log?
+			continue
+		}
+		mappedPorts[port] = struct{}{}
+	}
+
+	for k, v := range configPortMap {
+		if _, ok := mappedPorts[k]; ok {
+			exposedPortMap[k] = v
+		}
+	}
+
+	// Fix: Ensure that ports with empty HostPort get "0" for automatic allocation
+	// This fixes the UDP port binding issue where ports were getting HostPort:0 instead of being allocated
+	for k, v := range exposedPortMap {
+		for i := range v {
+			if v[i].HostPort == "" {
+				v[i].HostPort = "0" // Tell Docker to allocate a random port
+			}
+		}
+		exposedPortMap[k] = v
+	}
+
+	return exposedPortMap
+}
+
+func preCreateContainerHook(ctx context.Context, dockerClient client.SDKClient, def *Definition, dockerInput *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig) error {
+	endpointSettings := map[string]*network.EndpointSettings{}
+
+	// Docker allows only one network to be specified during container creation
+	// If there is more than one network specified in the request container should be attached to them
+	// once it is created. We will take a first network if any specified in the request and use it to create container
+	if len(def.networks) > 0 {
+		attachContainerTo := def.networks[0]
+
+		nwInspect, err := dockerClient.NetworkInspect(ctx, def.networks[0], dockerclient.NetworkInspectOptions{
+			Verbose: true,
+		})
+		if err != nil {
+			return fmt.Errorf("network inspect: %w", err)
+		}
+
+		var aliases []string
+		if _, ok := def.networkAliases[attachContainerTo]; ok {
+			aliases = def.networkAliases[attachContainerTo]
+		}
+		endpointSetting := network.EndpointSettings{
+			Aliases:   aliases,
+			NetworkID: nwInspect.Network.ID,
+		}
+		endpointSettings[attachContainerTo] = &endpointSetting
+
+	}
+
+	if def.configModifier != nil {
+		def.configModifier(dockerInput)
+	}
+
+	if def.hostConfigModifier != nil {
+		def.hostConfigModifier(hostConfig)
+	}
+
+	if def.endpointSettingsModifier != nil {
+		def.endpointSettingsModifier(endpointSettings)
+	}
+
+	networkingConfig.EndpointsConfig = endpointSettings
+
+	exposedPorts := def.exposedPorts
+	// this check must be done after the pre-creation Modifiers are called, so the network mode is already set
+	if len(exposedPorts) == 0 && !hostConfig.NetworkMode.IsContainer() {
+		hostConfig.PublishAllPorts = true
+	}
+
+	exposedPortSet, exposedPortMap, err := parsePortSpecs(exposedPorts)
+	if err != nil {
+		return err
+	}
+
+	dockerInput.ExposedPorts = exposedPortSet
+
+	// only exposing those ports automatically if the container request exposes zero ports and the container does not run in a container network
+	if len(exposedPorts) == 0 && !hostConfig.NetworkMode.IsContainer() {
+		hostConfig.PortBindings = exposedPortMap
+	} else {
+		hostConfig.PortBindings = mergePortBindings(hostConfig.PortBindings, exposedPortMap, def.exposedPorts)
+	}
+
+	return nil
+}
+
+// TODO(robmry) - migrate away from nat.ParsePortSpecs
+func parsePortSpecs(exposedPorts []string) (network.PortSet, network.PortMap, error) {
+	p, b, err := nat.ParsePortSpecs(exposedPorts)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ports := network.PortSet{}
+	for portStr := range p {
+		port, err := network.ParsePort(string(portStr))
+		if err != nil {
+			return nil, nil, err
+		}
+		ports[port] = struct{}{}
+	}
+	bindings := network.PortMap{}
+	for portStr, natBs := range b {
+		port, err := network.ParsePort(string(portStr))
+		if err != nil {
+			return nil, nil, err
+		}
+		bs := make([]network.PortBinding, 0, len(natBs))
+		for _, nb := range natBs {
+			var addr netip.Addr
+			if nb.HostIP != "" {
+				var err error
+				addr, err = netip.ParseAddr(nb.HostIP)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+			bs = append(bs, network.PortBinding{
+				HostIP:   addr,
+				HostPort: nb.HostPort,
+			})
+		}
+		bindings[port] = bs
+	}
+	return ports, bindings, nil
+}

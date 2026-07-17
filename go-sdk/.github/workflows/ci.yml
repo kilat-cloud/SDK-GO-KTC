@@ -1,0 +1,113 @@
+name: Main pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  detect-packages:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      packages: ${{ steps.filter.outputs.changes || '[]' }}
+    steps:
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Generate filters
+        id: filter-setup
+        run: |
+          filters=$(go work edit -json | jq -r '.Use[] | "\(.DiskPath | ltrimstr("./")): \"\(.DiskPath | ltrimstr("./"))/**\""')
+          echo "filters<<EOF" >> $GITHUB_OUTPUT
+          echo "$filters" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Filter changes
+        id: filter
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        with:
+          filters: ${{ steps.filter-setup.outputs.filters }}
+
+  lint:
+    needs:
+      - detect-packages
+    if: needs.detect-packages.outputs.packages != '[]' # Ensure job runs only if there are changes
+    strategy:
+      # We don't want to fail the build the soonest but identify which modules passed and failed.
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.detect-packages.outputs.packages || '[]') }}
+    permissions:
+      contents: read  # for actions/checkout to fetch code
+      pull-requests: write  # for golangci-lint action to determine which PR to decorate
+    uses: ./.github/workflows/ci-lint-go.yml
+    with:
+      project-directory: "${{ matrix.package }}"
+
+  test:
+    needs:
+      - detect-packages
+      - lint
+    if: needs.detect-packages.outputs.packages != '[]' # Ensure job runs only if there are changes
+    strategy:
+      # We don't want to fail the build the soonest but identify which modules passed and failed.
+      fail-fast: false
+      matrix:
+        go-version: [1.24.x, 1.25.x]
+        package: ${{ fromJSON(needs.detect-packages.outputs.packages || '[]') }}
+    permissions:
+      contents: read  # for actions/checkout to fetch code
+      pull-requests: read  # for sonarsource/sonarcloud-github-action to determine which PR to decorate
+    uses: ./.github/workflows/ci-test-go.yml
+    with:
+      go-version: ${{ matrix.go-version }}
+      project-directory: "${{ matrix.package }}"
+    secrets: inherit
+
+  benchmarks:
+    needs:
+      - detect-packages
+      - lint
+      - test
+    if: needs.detect-packages.outputs.packages != '[]' # Ensure job runs only if there are changes
+    strategy:
+      # We don't want to fail the build the soonest but identify which modules passed and failed.
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.detect-packages.outputs.packages || '[]') }}
+    permissions:
+      contents: read  # for actions/checkout to fetch code
+      pull-requests: write  # for sonarsource/sonarcloud-github-action to determine which PR to decorate
+    uses: ./.github/workflows/ci-benchmarks.yml
+    with:
+      project-directory: "${{ matrix.package }}"
+    secrets: inherit
+
+  # This job serves as confirmation that all test jobs finished
+  end:
+    if: needs.detect-packages.outputs.packages != '[]' # Ensure job runs only if there are changes
+    needs:
+      - detect-packages
+      - test
+      - benchmarks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check if any jobs failed
+        if: ${{ failure() || cancelled() }}
+        run: exit 1
+
+      - run: echo "All tests completed successfully!"

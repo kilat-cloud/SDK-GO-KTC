@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "rustfst",
+    "rustfst-cli",
+    "rustfst-ffi",
+]
+
+[profile.release]
+lto = true
+panic = "abort"

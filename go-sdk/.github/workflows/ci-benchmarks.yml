@@ -1,0 +1,114 @@
+name: Run benchmarks for a Go project
+run-name: "${{ inputs.project-directory }}"
+
+on:
+  workflow_call:
+    inputs:
+      project-directory:
+        required: true
+        type: string
+        default: "."
+        description: "The directory where the Go project is located."
+
+permissions:
+  contents: read
+  # we need write permission to be able to post comments to pull request
+  pull-requests: write
+
+jobs:
+  Compare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Disabling shallow clone is recommended for improving relevancy of reporting
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: ${{ inputs.project-directory }}/go.mod
+          cache-dependency-path: ${{ inputs.project-directory }}/go.sum
+        id: go
+
+      - name: Run Benchmark
+        working-directory: ${{ inputs.project-directory }}
+        run: set -o pipefail; go test ./... -benchmem -run=^$ -bench . | tee output.txt
+
+      - name: Check benchmark output and exit gracefully if not found
+        id: check-benchmarks
+        working-directory: ${{ inputs.project-directory }}
+        run: |
+          if [ ! -f output.txt ]; then
+            echo "No benchmarks found. Workflow completed successfully."
+            echo "benchmarks_found=false" >> $GITHUB_OUTPUT
+          else
+            # Check if output indicates no test files
+            if grep -q "${{ inputs.project-directory }} \[no test files\]" output.txt; then
+              echo "No benchmark test files found for this module. Workflow completed successfully."
+              echo "benchmarks_found=false" >> $GITHUB_OUTPUT
+            else
+              echo "benchmarks_found=true" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      # NOTE: Benchmarks could change with different CPU types
+      - name: Get GitHub Runner System Information
+        if: ${{ steps.check-benchmarks.outputs.benchmarks_found == 'true' }}
+        uses: kenchan0130/actions-system-info@59699597e84e80085a750998045983daa49274c4 # v1.4.0
+        id: system-info
+
+      - name: Get latest SHA for ${{ inputs.project-directory }} in main
+        if: ${{ steps.check-benchmarks.outputs.benchmarks_found == 'true' }}
+        id: get-main-branch-sha
+        working-directory: ${{ inputs.project-directory }}
+        run: |
+          SHA=$(git log -1 --format="%H" origin/main -- .)
+          echo "sha=$SHA" >> $GITHUB_OUTPUT
+
+      - name: Get Benchmark Results from main branch
+        if: ${{ steps.check-benchmarks.outputs.benchmarks_found == 'true' }}
+        id: cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ./${{ inputs.project-directory }}/cache
+          key: ${{ steps.get-main-branch-sha.outputs.sha }}-${{ runner.os }}-${{ steps.system-info.outputs.cpu-model }}-${{ inputs.project-directory }}-benchmark
+
+      # This will only run if we have Benchmark Results from main branch
+      - name: Compare PR Benchmark Results with main branch
+        uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
+        if: ${{ steps.cache.outputs.cache-hit == 'true' && steps.check-benchmarks.outputs.benchmarks_found == 'true' }}
+        with:
+          tool: 'go'
+          output-file-path: ./${{ inputs.project-directory }}/output.txt
+          external-data-json-path: ./${{ inputs.project-directory }}/cache/benchmark-data.json
+          # Do not save the data (This allows comparing benchmarks)
+          save-data-file: false
+          fail-on-alert: true
+          # Comment on the PR if the branch is not a fork
+          comment-on-alert: ${{ github.event.pull_request.head.repo.fork == false }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          summary-always: true
+          alert-threshold: "150%"
+
+      - name: Store Benchmark Results for main branch
+        uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
+        if: ${{ github.ref_name == 'main' && steps.check-benchmarks.outputs.benchmarks_found == 'true' }}
+        with:
+          tool: 'go'
+          output-file-path: ./${{ inputs.project-directory }}/output.txt
+          external-data-json-path: ./${{ inputs.project-directory }}/cache/benchmark-data.json
+          # Save the data to external file (cache)
+          save-data-file: true
+          fail-on-alert: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          summary-always: true
+          alert-threshold: "150%"
+
+      - name: Update Benchmark Results cache
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        if: ${{ steps.check-benchmarks.outputs.benchmarks_found == 'true' && github.ref_name == 'main' }}
+        with:
+          path: ./${{ inputs.project-directory }}/cache
+          key: ${{ steps.get-main-branch-sha.outputs.sha }}-${{ runner.os }}-${{ steps.system-info.outputs.cpu-model }}-${{ inputs.project-directory }}-benchmark
